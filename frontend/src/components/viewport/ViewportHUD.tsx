@@ -15,8 +15,27 @@ export default function ViewportHUD() {
   const numLayers = useActivationStore((s) => s.numLayers);
   const sliceDepth = useViewportStore((s) => s.sliceDepth);
   const gamma = useViewportStore((s) => s.gamma);
+  const layoutMode = useViewportStore((s) => s.layoutMode);
+  const layoutGap = useViewportStore((s) => s.layoutGap);
+  const layoutStep = useViewportStore((s) => s.layoutStep);
+  const isoLayoutMode = useViewportStore((s) => s.isoLayoutMode);
+  const isoLayoutGap = useViewportStore((s) => s.isoLayoutGap);
+  const isoLayoutStep = useViewportStore((s) => s.isoLayoutStep);
+  const isolatedLayers = useViewportStore((s) => s.isolatedLayers);
 
   if (numLayers === 0) return null;
+
+  const layoutDisplay = layoutMode === 'exploded'
+    ? `exploded (${layoutGap.toFixed(1)})`
+    : layoutMode === 'staircase'
+      ? `staircase (${layoutStep.toFixed(1)})`
+      : 'stack';
+
+  const isoLayoutDisplay = isoLayoutMode === 'exploded'
+    ? `exploded (${isoLayoutGap.toFixed(1)})`
+    : isoLayoutMode === 'staircase'
+      ? `staircase (${isoLayoutStep.toFixed(1)})`
+      : 'stack';
 
   return (
     <div
@@ -34,9 +53,16 @@ export default function ViewportHUD() {
         <div style={{ whiteSpace: 'pre' }}>{'Left / Right'.padEnd(16)}dimension trajectory     (6 bands)</div>
       </div>
 
-      {/* Top-right: Slice Depth Indicator */}
+      {/* Top-right: Slice & Layout Info */}
       <div style={{ position: 'absolute', top: 8, right: 8, ...panelStyle }}>
-        Slice: {sliceDepth !== null ? sliceDepth.toFixed(2) : 'off'}
+        <div>Slice: {sliceDepth !== null ? sliceDepth.toFixed(2) : 'off'}</div>
+        <div>Layout: {layoutDisplay}</div>
+        {isolatedLayers.length > 0 && (
+          <>
+            <div>Isolated: {isolatedLayers.map((l) => `L${l}`).join(', ')}</div>
+            {isoLayoutMode !== 'stack' && <div>Iso layout: {isoLayoutDisplay}</div>}
+          </>
+        )}
       </div>
 
       {/* Bottom-left: Color Scale Bar */}

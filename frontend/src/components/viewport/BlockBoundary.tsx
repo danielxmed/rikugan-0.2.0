@@ -3,9 +3,10 @@ import { useFrame, useThree } from '@react-three/fiber';
 import * as THREE from 'three';
 import { useViewportStore } from '../../stores/viewportStore';
 import { useActivationStore } from '../../stores/activationStore';
-import { BLOCK_W, BLOCK_H, BLOCK_D, BLOCK_GAP, blockDimensions } from './blockLayout';
+import { BLOCK_W, BLOCK_H, BLOCK_D, BLOCK_GAP, blockDimensions, animatedBlockPositions } from './blockLayout';
 
 const MARGIN = 0.3;
+const GLOW_CLEAR_DIST = MARGIN * 3;
 
 export default function BlockBoundary({
   onBoundaryReached,
@@ -32,19 +33,28 @@ export default function BlockBoundary({
     const bd = dims ? dims.depth : BLOCK_D;
 
     const halfW = bw / 2 + MARGIN;
+    const halfH = bh / 2 + MARGIN;
     const halfD = bd / 2 + MARGIN;
+
+    const isolatedLayers = useViewportStore.getState().isolatedLayers;
+    const hasIsolation = isolatedLayers.length > 0;
 
     let inside = false;
     let hitLayer = -1;
 
     for (let i = 0; i < numLayers; i++) {
-      const cy = i * (bh + BLOCK_GAP);
-      const halfH = bh / 2 + MARGIN;
+      // Skip non-isolated blocks when isolation is active
+      if (hasIsolation && !isolatedLayers.includes(i)) continue;
+
+      // Use animated positions if available, otherwise fallback
+      const cx = animatedBlockPositions[i]?.x ?? 0;
+      const cy = animatedBlockPositions[i]?.y ?? i * (bh + BLOCK_GAP);
+      const cz = animatedBlockPositions[i]?.z ?? 0;
 
       if (
-        camera.position.x > -halfW && camera.position.x < halfW &&
+        camera.position.x > cx - halfW && camera.position.x < cx + halfW &&
         camera.position.y > cy - halfH && camera.position.y < cy + halfH &&
-        camera.position.z > -halfD && camera.position.z < halfD
+        camera.position.z > cz - halfD && camera.position.z < cz + halfD
       ) {
         inside = true;
         hitLayer = i;
@@ -61,6 +71,21 @@ export default function BlockBoundary({
       }
     } else {
       lastValidPos.current.copy(camera.position);
+
+      // Clear boundary glow when camera moves away from the block
+      const currentBoundary = useViewportStore.getState().boundaryLayer;
+      if (currentBoundary !== null) {
+        const bx = animatedBlockPositions[currentBoundary]?.x ?? 0;
+        const by = animatedBlockPositions[currentBoundary]?.y ?? currentBoundary * (bh + BLOCK_GAP);
+        const bz = animatedBlockPositions[currentBoundary]?.z ?? 0;
+        const dx = camera.position.x - bx;
+        const dy = camera.position.y - by;
+        const dz = camera.position.z - bz;
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        if (dist > GLOW_CLEAR_DIST) {
+          useViewportStore.getState().setBoundaryLayer(null);
+        }
+      }
     }
   });
 

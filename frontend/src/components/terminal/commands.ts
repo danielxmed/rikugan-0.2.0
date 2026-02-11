@@ -45,10 +45,17 @@ export async function getModelInfo(
 
 export function showHelp(writeLine: (text: string) => void): void {
   writeLine('  \x1b[1mCommands:\x1b[0m');
-  writeLine('  load <model>   Load a model (e.g. load qwen3-0.6b)');
-  writeLine('  run <prompt>   Run inference on the loaded model');
-  writeLine('  info           Show info about the loaded model');
-  writeLine('  contrast <\u03B3>   Set power-law contrast (default 3.0, higher = sparser)');
-  writeLine('  slice <name>   Set face slice (auto, resid_pre, attn_out, delta_attn, mlp_out, delta_mlp, resid_post)');
-  writeLine('  help           Show this help message');
+  writeLine('  load <model>            Load a model (e.g. load qwen3-0.6b)');
+  writeLine('  run <prompt>            Run inference on the loaded model');
+  writeLine('  info                    Show info about the loaded model');
+  writeLine('  contrast <\u03B3>            Set power-law contrast (default 3.0, higher = sparser)');
+  writeLine('  slice <name>            Set face slice (auto, resid_pre, attn, mlp, resid_post, ...)');
+  writeLine('  layout stack            Reset to default vertical column');
+  writeLine('  layout exploded [gap]   Separate blocks vertically (default gap: 1.0)');
+  writeLine('  layout staircase [step] Diagonal staircase (default step: 0.5)');
+  writeLine('  layout ... --iso        Apply layout to isolated blocks only');
+  writeLine('  get layer <N>           Isolate block N beside the model (max 4)');
+  writeLine('  release                 Return all isolated blocks to formation');
+  writeLine('  release layer <N>       Return specific block to formation');
+  writeLine('  help                    Show this help message');
 }

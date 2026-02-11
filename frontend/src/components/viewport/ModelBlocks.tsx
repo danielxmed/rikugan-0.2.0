@@ -1,9 +1,10 @@
 import { useRef, useEffect } from 'react';
 import * as THREE from 'three';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useActivationStore, SLICE_INDEX, NUM_SLICES, getSliceOffset, getTokenProjSlice, getDimProjSlice } from '../../stores/activationStore';
 import { useViewportStore } from '../../stores/viewportStore';
 import { createSliceMaterial, createBandMaterial } from './heatmapShader';
-import { BLOCK_W, BLOCK_H, BLOCK_D, BLOCK_GAP, blockDimensions } from './blockLayout';
+import { BLOCK_W, BLOCK_H, BLOCK_D, BLOCK_GAP, blockDimensions, computeBlockPositions, animatedBlockPositions } from './blockLayout';
 
 // Heat palette: deep blue -> dark blue -> red -> bright red -> white-hot
 const PALETTE = [
@@ -41,8 +42,10 @@ function FallbackBlocks({ numLayers, blockHeat, gamma }: {
 
   useEffect(() => {
     if (!meshRef.current || numLayers === 0) return;
+    const dims = { width: BLOCK_W, height: BLOCK_H, depth: BLOCK_D };
+    const positions = computeBlockPositions(numLayers, dims, 'stack', 1.0, 0.5);
     for (let i = 0; i < numLayers; i++) {
-      _dummy.position.set(0, i * (BLOCK_H + BLOCK_GAP), 0);
+      _dummy.position.copy(positions[i]);
       _dummy.updateMatrix();
       meshRef.current.setMatrixAt(i, _dummy.matrix);
     }
@@ -107,7 +110,36 @@ interface GpuResources {
   blocks: BlockGpuResources[];
   meshes: THREE.Mesh[];
   geometry: THREE.BoxGeometry;
+  clipPlanes: THREE.Plane[];  // one per block, for slice clipping
 }
+
+/** Set uOpacity uniform on all 4 materials of a block */
+function setBlockOpacity(block: BlockGpuResources, opacity: number): void {
+  const transparent = opacity < 0.999;
+  for (const mat of [block.topMat, block.bottomMat, block.tokenBandMat, block.dimBandMat]) {
+    mat.uniforms.uOpacity.value = opacity;
+    mat.transparent = transparent;
+  }
+}
+
+/** Set uEmissive uniform on all 4 materials of a block */
+function setBlockEmissive(block: BlockGpuResources, emissive: number): void {
+  for (const mat of [block.topMat, block.bottomMat, block.tokenBandMat, block.dimBandMat]) {
+    mat.uniforms.uEmissive.value = emissive;
+  }
+}
+
+/** Set clipping plane on all 4 materials of a block, or clear it */
+function setBlockClip(block: BlockGpuResources, plane: THREE.Plane | null): void {
+  const planes = plane ? [plane] : [];
+  for (const mat of [block.topMat, block.bottomMat, block.tokenBandMat, block.dimBandMat]) {
+    mat.clippingPlanes = planes;
+  }
+}
+
+// Reusable Vector3 for target computation
+const _targetVec = new THREE.Vector3();
+const _cameraTarget = new THREE.Vector3();
 
 /** Volumetric: 28 individual meshes with distinct face types */
 function VolumetricBlocks({ numLayers, sliceData, sliceMeta, gamma, sliceDepth, tokenProj, dimProj }: {
@@ -123,6 +155,16 @@ function VolumetricBlocks({ numLayers, sliceData, sliceMeta, gamma, sliceDepth, 
   const dims = blockDimensions(seq_len, d_model);
   const groupRef = useRef<THREE.Group>(null);
   const gpuRef = useRef<GpuResources | null>(null);
+
+  // Animation refs
+  const currentPositions = useRef<THREE.Vector3[]>([]);
+  const currentOpacities = useRef<number[]>([]);
+  // Camera target transition: only actively lerp when layout/isolation changes
+  const cameraTransitioning = useRef(false);
+  const prevLayoutKey = useRef('');  // serialized layout+isolation state for change detection
+
+  // Access controls for camera target during isolation
+  const controls = useThree((s) => s.controls) as { target: THREE.Vector3 } | null;
 
   // Create all GPU resources and add meshes to group
   useEffect(() => {
@@ -145,6 +187,15 @@ function VolumetricBlocks({ numLayers, sliceData, sliceMeta, gamma, sliceDepth, 
     const geometry = new THREE.BoxGeometry(dims.width, dims.height, dims.depth);
     const blocks: BlockGpuResources[] = [];
     const meshes: THREE.Mesh[] = [];
+
+    // Compute initial positions
+    const initPositions = computeBlockPositions(numLayers, dims, 'stack', 1.0, 0.5);
+
+    // Initialize animation state
+    currentPositions.current = [];
+    currentOpacities.current = [];
+    // Initialize shared animated positions array
+    animatedBlockPositions.length = 0;
 
     for (let layer = 0; layer < numLayers; layer++) {
       // Top/bottom: full heatmap textures [d_model, seq_len]
@@ -199,12 +250,22 @@ function VolumetricBlocks({ numLayers, sliceData, sliceMeta, gamma, sliceDepth, 
         tokenBandMat,  // 4: +Z front
         tokenBandMat,  // 5: -Z back
       ]);
-      mesh.position.set(0, layer * (dims.height + BLOCK_GAP), 0);
+      mesh.position.copy(initPositions[layer]);
       meshes.push(mesh);
       group.add(mesh);
+
+      currentPositions.current.push(initPositions[layer].clone());
+      currentOpacities.current.push(1.0);
+      animatedBlockPositions.push(initPositions[layer].clone());
     }
 
-    gpuRef.current = { blocks, meshes, geometry };
+    // Create one clipping plane per block (updated each frame in useFrame)
+    const clipPlanes: THREE.Plane[] = [];
+    for (let i = 0; i < numLayers; i++) {
+      clipPlanes.push(new THREE.Plane(new THREE.Vector3(0, -1, 0), 0));
+    }
+
+    gpuRef.current = { blocks, meshes, geometry, clipPlanes };
 
     return () => {
       for (const mesh of meshes) group.remove(mesh);
@@ -216,6 +277,7 @@ function VolumetricBlocks({ numLayers, sliceData, sliceMeta, gamma, sliceDepth, 
       }
       geometry.dispose();
       gpuRef.current = null;
+      animatedBlockPositions.length = 0;
     };
   }, [numLayers, seq_len, d_model, dims.width, dims.height, dims.depth]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -285,6 +347,139 @@ function VolumetricBlocks({ numLayers, sliceData, sliceMeta, gamma, sliceDepth, 
       b.dimBandMat.uniforms.uSliceIndicator.value = indicator;
     }
   }, [sliceDepth]);
+
+  // Animation loop: position, opacity, emissive, camera target
+  useFrame((_state, delta) => {
+    const gpu = gpuRef.current;
+    if (!gpu || gpu.meshes.length === 0) return;
+
+    const { layoutMode, layoutGap, layoutStep,
+            isoLayoutMode, isoLayoutGap, isoLayoutStep,
+            isolatedLayers, boundaryLayer } =
+      useViewportStore.getState();
+
+    const n = gpu.meshes.length;
+    const lerpFactor = 1 - Math.pow(0.001, delta);
+
+    // 1. Compute layout target positions
+    const layoutPositions = computeBlockPositions(n, dims, layoutMode, layoutGap, layoutStep);
+
+    // 2. Compute stack midpoint for camera target default
+    const stackMidY = ((n - 1) * (dims.height + BLOCK_GAP)) / 2;
+
+    // 3. Compute isolation override targets
+    const hasIsolation = isolatedLayers.length > 0;
+
+    // Find the rightmost X extent of the layout for isolation placement
+    let maxLayoutX = 0;
+    // Pre-compute iso positions (horizontal layout: X = primary axis, Y = secondary)
+    let isoTargets: THREE.Vector3[] | null = null;
+    if (hasIsolation) {
+      for (let i = 0; i < n; i++) {
+        maxLayoutX = Math.max(maxLayoutX, layoutPositions[i].x);
+      }
+      const isoCount = isolatedLayers.length;
+      const startX = maxLayoutX + dims.width * 2.5;
+      isoTargets = [];
+      for (let j = 0; j < isoCount; j++) {
+        let dx = 0, dy = 0;
+        switch (isoLayoutMode) {
+          case 'stack':
+            dx = j * (dims.width + BLOCK_GAP * 2);
+            break;
+          case 'exploded':
+            dx = j * (dims.width + dims.width * isoLayoutGap + BLOCK_GAP * 2);
+            break;
+          case 'staircase':
+            dx = j * (dims.width + BLOCK_GAP * 2);
+            dy = j * dims.height * isoLayoutStep;
+            break;
+        }
+        isoTargets.push(new THREE.Vector3(startX + dx, stackMidY + dy, 0));
+      }
+    }
+
+    for (let i = 0; i < n; i++) {
+      // Determine target position
+      if (hasIsolation && isolatedLayers.includes(i) && isoTargets) {
+        const isolIdx = isolatedLayers.indexOf(i);
+        _targetVec.copy(isoTargets[isolIdx]);
+      } else {
+        _targetVec.copy(layoutPositions[i]);
+      }
+
+      // Lerp position
+      currentPositions.current[i].lerp(_targetVec, lerpFactor);
+      gpu.meshes[i].position.copy(currentPositions.current[i]);
+
+      // Write to shared animated positions
+      if (animatedBlockPositions[i]) {
+        animatedBlockPositions[i].copy(currentPositions.current[i]);
+      }
+
+      // Determine target opacity
+      const targetOpacity = hasIsolation && !isolatedLayers.includes(i) ? 0.15 : 1.0;
+
+      // Lerp opacity
+      const currOp = currentOpacities.current[i];
+      currentOpacities.current[i] = currOp + (targetOpacity - currOp) * lerpFactor;
+      setBlockOpacity(gpu.blocks[i], currentOpacities.current[i]);
+
+      // Emissive glow for boundary hit
+      const emissiveTarget = (i === boundaryLayer) ? 0.15 : 0.0;
+      setBlockEmissive(gpu.blocks[i], emissiveTarget);
+
+      // Clipping plane for slice cut
+      const currentSliceDepth = useViewportStore.getState().sliceDepth;
+      if (currentSliceDepth !== null && gpu.clipPlanes[i]) {
+        // Clip everything above the slice Y: normal (0,-1,0), constant = sliceY
+        // Plane eq: -y + constant >= 0  =>  y <= constant
+        const sliceY = currentPositions.current[i].y
+          - dims.height / 2
+          + currentSliceDepth * dims.height;
+        gpu.clipPlanes[i].set(new THREE.Vector3(0, -1, 0), sliceY);
+        setBlockClip(gpu.blocks[i], gpu.clipPlanes[i]);
+      } else {
+        setBlockClip(gpu.blocks[i], null);
+      }
+    }
+
+    // 4. Camera target: only lerp during layout/isolation transitions
+    if (controls && 'target' in controls) {
+      // Detect layout/isolation state changes
+      const layoutKey = `${layoutMode}:${layoutGap}:${layoutStep}:${isoLayoutMode}:${isoLayoutGap}:${isoLayoutStep}:${isolatedLayers.join(',')}`;
+      if (layoutKey !== prevLayoutKey.current) {
+        prevLayoutKey.current = layoutKey;
+        cameraTransitioning.current = true;
+      }
+
+      if (cameraTransitioning.current) {
+        if (hasIsolation) {
+          // Target = centroid of isolated blocks
+          _cameraTarget.set(0, 0, 0);
+          for (const li of isolatedLayers) {
+            _cameraTarget.add(currentPositions.current[li]);
+          }
+          _cameraTarget.divideScalar(isolatedLayers.length);
+        } else {
+          // Target = center of layout
+          _cameraTarget.set(
+            layoutPositions.length > 0 ? layoutPositions[Math.floor(n / 2)].x : 0,
+            stackMidY,
+            0,
+          );
+        }
+
+        controls.target.lerp(_cameraTarget, lerpFactor);
+
+        // Stop transitioning once converged
+        const dist = controls.target.distanceTo(_cameraTarget);
+        if (dist < 0.01) {
+          cameraTransitioning.current = false;
+        }
+      }
+    }
+  });
 
   return <group ref={groupRef} />;
 }

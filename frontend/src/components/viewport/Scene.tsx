@@ -21,7 +21,7 @@ export default function Scene() {
       <SlicePlane />
       <BlockBoundary />
       <LayerLabels />
-      <OrbitControls ref={controlsRef} enableDamping dampingFactor={0.1} />
+      <OrbitControls ref={controlsRef} makeDefault enableDamping dampingFactor={0.1} />
       <GizmoHelper alignment="bottom-right" margin={[60, 60]}>
         <GizmoViewport />
       </GizmoHelper>

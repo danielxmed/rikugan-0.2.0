@@ -7,7 +7,7 @@ export default function Viewport() {
     <div style={{ width: '100%', height: '100%', position: 'relative' }}>
       <Canvas
         camera={{ position: [0, 5, 10], fov: 50 }}
-        gl={{ antialias: true, alpha: false }}
+        gl={{ antialias: true, alpha: false, localClippingEnabled: true }}
       >
         <Scene />
       </Canvas>

@@ -86,6 +86,46 @@ export function parseCommand(raw: string): ParsedCommand {
       }
       return { kind: 'error', message: `Unknown slice: ${tokens[1]}. Valid: ${Object.keys(SLICE_DEPTH_MAP).join(', ')}, or a number 0.0-1.0` };
     }
+    case 'layout': {
+      if (tokens.length < 2) {
+        return { kind: 'error', message: 'Usage: layout <stack|exploded|staircase> [param] [--iso]' };
+      }
+      // Extract --iso flag from anywhere in tokens
+      const isoFlag = tokens.some((t) => t.toLowerCase() === '--iso');
+      const args = tokens.filter((t) => t.toLowerCase() !== '--iso');
+      const mode = args[1]?.toLowerCase();
+      if (mode !== 'stack' && mode !== 'exploded' && mode !== 'staircase') {
+        return { kind: 'error', message: `Unknown layout: ${args[1]}. Valid: stack, exploded, staircase` };
+      }
+      const param = args.length > 2 ? parseFloat(args[2]) : undefined;
+      if (param !== undefined && isNaN(param)) {
+        return { kind: 'error', message: `Invalid parameter: ${args[2]}. Must be a number.` };
+      }
+      return { kind: 'layout', mode, param, iso: isoFlag || undefined };
+    }
+    case 'get': {
+      if (tokens.length < 3 || tokens[1].toLowerCase() !== 'layer') {
+        return { kind: 'error', message: 'Usage: get layer <N>' };
+      }
+      const layer = parseInt(tokens[2], 10);
+      if (isNaN(layer) || layer < 0 || layer > 27) {
+        return { kind: 'error', message: 'Layer must be 0–27' };
+      }
+      return { kind: 'get', layer };
+    }
+    case 'release': {
+      if (tokens.length < 2) {
+        return { kind: 'release', layer: null };
+      }
+      if (tokens[1].toLowerCase() !== 'layer' || tokens.length < 3) {
+        return { kind: 'error', message: 'Usage: release [layer <N>]' };
+      }
+      const layer = parseInt(tokens[2], 10);
+      if (isNaN(layer) || layer < 0 || layer > 27) {
+        return { kind: 'error', message: 'Layer must be 0–27' };
+      }
+      return { kind: 'release', layer };
+    }
     case 'help': {
       const topic = tokens.length > 1 ? tokens[1] : null;
       return { kind: 'help', topic };

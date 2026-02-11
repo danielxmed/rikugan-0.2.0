@@ -41,6 +41,43 @@ export async function dispatchCommand(
       }
       break;
 
+    case 'layout': {
+      if (command.iso) {
+        useViewportStore.getState().setIsoLayout(command.mode, command.param);
+      } else {
+        useViewportStore.getState().setLayout(command.mode, command.param);
+      }
+      const label = command.iso ? 'Isolated layout' : 'Layout';
+      if (command.param !== undefined) {
+        writeLine(`${label} set to \x1b[1m${command.mode}\x1b[0m (${command.param})`);
+      } else {
+        writeLine(`${label} set to \x1b[1m${command.mode}\x1b[0m`);
+      }
+      break;
+    }
+
+    case 'get': {
+      const vs = useViewportStore.getState();
+      if (vs.isolatedLayers.length >= 4) {
+        writeLine('\x1b[33mMax 4 isolated layers. Release one first.\x1b[0m');
+      } else if (vs.isolatedLayers.includes(command.layer)) {
+        writeLine(`\x1b[33mLayer ${command.layer} already isolated\x1b[0m`);
+      } else {
+        vs.isolateLayer(command.layer);
+        writeLine(`Isolated \x1b[1mL${command.layer}\x1b[0m`);
+      }
+      break;
+    }
+
+    case 'release':
+      useViewportStore.getState().releaseLayer(command.layer);
+      if (command.layer === null) {
+        writeLine('Released all isolated layers');
+      } else {
+        writeLine(`Released \x1b[1mL${command.layer}\x1b[0m`);
+      }
+      break;
+
     case 'error':
       writeLine(`\x1b[31m${command.message}\x1b[0m`);
       break;

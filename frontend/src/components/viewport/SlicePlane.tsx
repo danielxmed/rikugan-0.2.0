@@ -1,9 +1,10 @@
 import { useRef, useEffect, useMemo } from 'react';
 import * as THREE from 'three';
+import { useFrame } from '@react-three/fiber';
 import { useActivationStore, getSliceOffset } from '../../stores/activationStore';
 import { useViewportStore } from '../../stores/viewportStore';
 import { createSliceMaterial } from './heatmapShader';
-import { BLOCK_GAP, blockDimensions } from './blockLayout';
+import { blockDimensions, animatedBlockPositions } from './blockLayout';
 
 /** Map sliceDepth [0,1] to the nearest discrete slice index */
 function depthToSliceIndex(depth: number): number {
@@ -73,7 +74,7 @@ export default function SlicePlane() {
 
       const mat = createSliceMaterial(tex, gamma);
       mat.transparent = true;
-      mat.opacity = 0.85;
+      mat.uniforms.uOpacity.value = 0.85;
       mat.depthWrite = false;
       materials.push(mat);
 
@@ -96,7 +97,7 @@ export default function SlicePlane() {
     };
   }, [numLayers, seq_len, d_model, dims]);
 
-  // Position planes and upload correct slice texture based on depth
+  // Upload correct slice texture based on depth
   useEffect(() => {
     const res = resRef.current;
     if (!res || !dims || sliceDepth === null || !sliceData || sliceData.length === 0) return;
@@ -105,11 +106,6 @@ export default function SlicePlane() {
     const sliceSize = seq_len * d_model;
 
     for (let layer = 0; layer < numLayers; layer++) {
-      const blockBaseY = layer * (dims.height + BLOCK_GAP);
-      const planeY = blockBaseY - dims.height / 2 + sliceDepth * dims.height;
-      res.meshes[layer].position.set(0, planeY, 0);
-      res.meshes[layer].visible = true;
-
       // Upload slice data
       const offset = getSliceOffset(layer, sliceIdx, seq_len, d_model);
       const texData = res.textures[layer].image.data as Float32Array;
@@ -135,6 +131,27 @@ export default function SlicePlane() {
       mat.uniforms.uGamma.value = gamma;
     }
   }, [gamma]);
+
+  // Position planes following animated block positions in useFrame
+  useFrame(() => {
+    const res = resRef.current;
+    if (!res || !dims) return;
+
+    const depth = useViewportStore.getState().sliceDepth;
+    if (depth === null) return;
+
+    for (let layer = 0; layer < res.meshes.length; layer++) {
+      const blockPos = animatedBlockPositions[layer];
+      if (!blockPos) continue;
+
+      res.meshes[layer].position.set(
+        blockPos.x,
+        blockPos.y - dims.height / 2 + depth * dims.height,
+        blockPos.z,
+      );
+      res.meshes[layer].visible = true;
+    }
+  });
 
   if (!hasData || numLayers === 0) return null;
 

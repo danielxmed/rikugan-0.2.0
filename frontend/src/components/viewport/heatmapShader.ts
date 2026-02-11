@@ -1,17 +1,22 @@
 import * as THREE from 'three';
 
 export const heatmapVertexShader = /* glsl */ `
+#include <clipping_planes_pars_vertex>
 varying vec2 vUv;
 void main() {
   vUv = uv;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+  #include <clipping_planes_vertex>
 }
 `;
 
 export const heatmapFragmentShader = /* glsl */ `
+#include <clipping_planes_pars_fragment>
 uniform sampler2D uSliceTexture;
 uniform float uGamma;
 uniform float uEmissive;
+uniform float uOpacity;
 
 varying vec2 vUv;
 
@@ -31,12 +36,13 @@ vec3 palette(float t) {
 }
 
 void main() {
+  #include <clipping_planes_fragment>
   float raw = texture2D(uSliceTexture, vUv).r;
   float val = pow(clamp(raw, 0.0, 1.0), uGamma);
   vec3 color = palette(val);
   // Add emissive glow for boundary hit
   color += vec3(uEmissive);
-  gl_FragColor = vec4(color, 1.0);
+  gl_FragColor = vec4(color, uOpacity);
 }
 `;
 
@@ -47,10 +53,12 @@ export function createSliceMaterial(
   return new THREE.ShaderMaterial({
     vertexShader: heatmapVertexShader,
     fragmentShader: heatmapFragmentShader,
+    clipping: true,
     uniforms: {
       uSliceTexture: { value: texture },
       uGamma: { value: gamma },
       uEmissive: { value: 0.0 },
+      uOpacity: { value: 1.0 },
     },
   });
 }
@@ -58,17 +66,22 @@ export function createSliceMaterial(
 // --- Band Shader (for lateral projection faces) ---
 
 export const bandVertexShader = /* glsl */ `
+#include <clipping_planes_pars_vertex>
 varying vec2 vUv;
 void main() {
   vUv = uv;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mvPosition;
+  #include <clipping_planes_vertex>
 }
 `;
 
 export const bandFragmentShader = /* glsl */ `
+#include <clipping_planes_pars_fragment>
 uniform sampler2D uBandTexture;
 uniform float uGamma;
 uniform float uEmissive;
+uniform float uOpacity;
 uniform float uNumBands;
 uniform float uSliceIndicator;
 
@@ -88,11 +101,12 @@ vec3 palette(float t) {
 }
 
 void main() {
+  #include <clipping_planes_fragment>
   float bandFrac = fract(vUv.y * uNumBands);
 
   // Dark separator between bands
   if (bandFrac < 0.04 || bandFrac > 0.96) {
-    gl_FragColor = vec4(vec3(0.06), 1.0);
+    gl_FragColor = vec4(vec3(0.06), uOpacity);
     return;
   }
 
@@ -100,7 +114,7 @@ void main() {
   if (uSliceIndicator >= 0.0) {
     float dist = abs(vUv.y - uSliceIndicator);
     if (dist < 0.008) {
-      gl_FragColor = vec4(1.0, 1.0, 0.3, 1.0);
+      gl_FragColor = vec4(1.0, 1.0, 0.3, uOpacity);
       return;
     }
   }
@@ -109,7 +123,7 @@ void main() {
   float raw = texture2D(uBandTexture, vUv).r;
   float val = pow(clamp(raw, 0.0, 1.0), uGamma);
   vec3 color = palette(val) + vec3(uEmissive);
-  gl_FragColor = vec4(color, 1.0);
+  gl_FragColor = vec4(color, uOpacity);
 }
 `;
 
@@ -120,10 +134,12 @@ export function createBandMaterial(
   return new THREE.ShaderMaterial({
     vertexShader: bandVertexShader,
     fragmentShader: bandFragmentShader,
+    clipping: true,
     uniforms: {
       uBandTexture: { value: texture },
       uGamma: { value: gamma },
       uEmissive: { value: 0.0 },
+      uOpacity: { value: 1.0 },
       uNumBands: { value: 6.0 },
       uSliceIndicator: { value: -1.0 },
     },
